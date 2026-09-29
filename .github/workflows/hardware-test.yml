@@ -53,7 +53,7 @@ jobs:
       - name: Determine image and tests
         id: config
         env:
-          # Without it gh falls back to the account logged in on the Pi.
+          # Without it gh falls back to the account logged in on the Pi!
           GH_TOKEN: ${{ github.token }}
           IMAGE_INPUT: ${{ inputs.image }}
           TESTS_INPUT: ${{ inputs.tests }}
