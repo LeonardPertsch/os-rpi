@@ -18,7 +18,7 @@ jobs:
       - name: Checkout ImSwitch
         uses: actions/checkout@v4
         with:
-          repository: openUC2/ImSwitch
+          repository: LeonardPertsch/ImSwitch
           path: ImSwitch
 
       - name: Show environment
@@ -42,4 +42,3 @@ jobs:
         working-directory: ImSwitch/imswitch/imcontrol/_test/e2e
         run: |
           ./run_all.sh
-
