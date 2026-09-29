@@ -1,0 +1,45 @@
+name: hardware-test
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: hardware-test-${{ github.repository }}
+  cancel-in-progress: false
+
+jobs:
+  hardware-test:
+    runs-on: [self-hosted, uc2-rig]
+
+    steps:
+      - name: Checkout os-rpi
+        uses: actions/checkout@v4
+
+      - name: Checkout ImSwitch
+        uses: actions/checkout@v4
+        with:
+          repository: openUC2/ImSwitch
+          path: ImSwitch
+
+      - name: Show environment
+        run: |
+          echo "OS-RPI commit:"
+          git rev-parse HEAD
+
+          echo
+          echo "Runner:"
+          hostname
+
+          echo
+          echo "Workspace:"
+          pwd
+
+          echo
+          echo "ImSwitch e2e directory:"
+          ls -la ImSwitch/imswitch/imcontrol/_test/e2e
+
+      - name: Run hardware e2e tests
+        working-directory: ImSwitch/imswitch/imcontrol/_test/e2e
+        run: |
+          ./run_all.sh
+
