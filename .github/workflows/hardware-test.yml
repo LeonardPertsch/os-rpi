@@ -2,7 +2,22 @@ name: hardware-test
 
 on:
   workflow_dispatch:
+    inputs:
+      image:
+        description: >
+          Image to test. Empty takes the newest master build of openUC2/ImSwitch
+          (the image behind the edge tag). A bare tag (e.g. sha-7d3adda) resolves
+          against ghcr.io/openuc2/imswitch; a full ref (repo/image:tag) is used as-is.
+        required: false
+        default: ""
+      tests:
+        description: >
+          Space-separated e2e folders to run (e.g. "board firmware"). Empty
+          runs the whole suite, including motor/camera/laser/ledmatrix.
+        required: false
+        default: ""
 
+# One rig, one run.
 concurrency:
   group: hardware-test-${{ github.repository }}
   cancel-in-progress: false
@@ -12,33 +27,63 @@ jobs:
     runs-on: [self-hosted, uc2-rig]
 
     steps:
-      - name: Checkout os-rpi
-        uses: actions/checkout@v4
-
       - name: Checkout ImSwitch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: LeonardPertsch/ImSwitch
           path: ImSwitch
 
-      - name: Show environment
+      - name: Determine image and tests
+        id: config
+        env:
+          # Without it gh falls back to the account logged in on the Pi.
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_INPUT: ${{ inputs.image }}
+          TESTS_INPUT: ${{ inputs.tests }}
         run: |
-          echo "OS-RPI commit:"
-          git rev-parse HEAD
+          IMAGE="$IMAGE_INPUT"
+          TESTS="$TESTS_INPUT"
 
-          echo
-          echo "Runner:"
-          hostname
+          # Every successful master push publishes sha-<commit> and moves edge.
+          # Pick the newest by date ourselves: the API has answered with an
+          # older run first before.
+          if [ -z "$IMAGE" ]; then
+            SHA="$(gh api "repos/openUC2/ImSwitch/actions/workflows/build-docker-server.yaml/runs?branch=master&event=push&status=success&per_page=20" \
+              --jq '.workflow_runs | max_by(.created_at) | .head_sha // empty')"
+            if [ -z "$SHA" ]; then
+              echo "::error::no successful master build of openUC2/ImSwitch found"
+              exit 1
+            fi
+            IMAGE="sha-${SHA::7}"
+          fi
 
-          echo
-          echo "Workspace:"
-          pwd
+          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "tests=$TESTS" >> "$GITHUB_OUTPUT"
+          # Artifact names must not contain / or :, a full ref has both.
+          echo "report=hil-report-${IMAGE//[\/:@]/-}" >> "$GITHUB_OUTPUT"
 
-          echo
-          echo "ImSwitch e2e directory:"
-          ls -la ImSwitch/imswitch/imcontrol/_test/e2e
+          echo "Runner:        $(hostname)"
+          echo "Image to test: $IMAGE"
+          echo "Tests:         ${TESTS:-all}"
+          echo "Testing \`$IMAGE\` on \`$(hostname)\`, tests: ${TESTS:-all}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run hardware e2e tests
+      - name: Run the e2e suite against the image under test
         working-directory: ImSwitch/imswitch/imcontrol/_test/e2e
+        env:
+          IMAGE: ${{ steps.config.outputs.image }}
+          TESTS: ${{ steps.config.outputs.tests }}
         run: |
-          ./run_all.sh
+          ci/hil-run.sh \
+            --image "$IMAGE" \
+            --yes \
+            --out ci/reports \
+            --tests "$TESTS"
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ steps.config.outputs.report || 'hil-report' }}
+          path: ImSwitch/imswitch/imcontrol/_test/e2e/ci/reports/
+          if-no-files-found: warn
+          retention-days: 30
