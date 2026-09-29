@@ -16,6 +16,10 @@ on:
           runs the whole suite, including motor/camera/laser/ledmatrix.
         required: false
         default: ""
+  # PRs with the "hardware-test" label: runs when the label is added and on
+  # every push to the PR while it is set.
+  pull_request:
+    types: [labeled, synchronize, reopened]
 
 # One rig, one run.
 concurrency:
@@ -24,9 +28,22 @@ concurrency:
 
 jobs:
   hardware-test:
+    # PRs only from branches of this repository: the job runs on the rig, and
+    # code from someone else's fork must not get there. Adding any other label
+    # to a labelled PR does not start another run.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       contains(github.event.pull_request.labels.*.name, 'hardware-test') &&
+       (github.event.action != 'labeled' || github.event.label.name == 'hardware-test'))
     runs-on: [self-hosted, uc2-rig]
 
     steps:
+      - name: Checkout os-rpi
+        uses: actions/checkout@v7
+        with:
+          path: os-rpi
+
       - name: Checkout ImSwitch
         uses: actions/checkout@v7
         with:
@@ -44,6 +61,17 @@ jobs:
           IMAGE="$IMAGE_INPUT"
           TESTS="$TESTS_INPUT"
 
+          # A PR tests the image it would deploy: the pin in its ImSwitch
+          # package, digest included, exactly as forklift runs it.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            IMAGE="$(awk '$1 == "image:" && $2 ~ /^ghcr\.io\/openuc2\/imswitch[:@]/ { print $2; exit }' \
+              os-rpi/deployments/imswitch.pkg/deployment.compose.yml | tr -d "\"'")"
+            if [ -z "$IMAGE" ]; then
+              echo "::error::no ImSwitch image pinned in deployments/imswitch.pkg/deployment.compose.yml"
+              exit 1
+            fi
+          fi
+
           # Every successful master push publishes sha-<commit> and moves edge.
           # Pick the newest by date ourselves: the API has answered with an
           # older run first before.
@@ -59,8 +87,10 @@ jobs:
 
           echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
           echo "tests=$TESTS" >> "$GITHUB_OUTPUT"
-          # Artifact names must not contain / or :, a full ref has both.
-          echo "report=hil-report-${IMAGE//[\/:@]/-}" >> "$GITHUB_OUTPUT"
+          # Artifact names must not contain / or :, a full ref has both. The
+          # digest adds nothing a reader needs there.
+          NAME="${IMAGE%@*}"
+          echo "report=hil-report-${NAME//[\/:]/-}" >> "$GITHUB_OUTPUT"
 
           echo "Runner:        $(hostname)"
           echo "Image to test: $IMAGE"
