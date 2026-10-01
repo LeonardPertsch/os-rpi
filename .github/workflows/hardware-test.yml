@@ -16,6 +16,13 @@ on:
           runs the whole suite, including motor/camera/laser/ledmatrix.
         required: false
         default: ""
+      suite_ref:
+        description: >
+          Branch, tag or SHA of the e2e suite to run. Empty takes the default
+          branch of the suite repository (the IMSWITCH_REPO variable, otherwise
+          LeonardPertsch/ImSwitch).
+        required: false
+        default: ""
   # PRs with the "hardware-test" label: runs when the label is added and on
   # every push to the PR while it is set.
   pull_request:
@@ -38,6 +45,12 @@ jobs:
        (github.event.action != 'labeled' || github.event.label.name == 'hardware-test'))
     runs-on: [self-hosted, uc2-rig]
 
+    env:
+      # Where the e2e suite (hil-run.sh included) comes from. The HIL tooling
+      # is not in openUC2/ImSwitch yet, so the fork is the default; once it
+      # is, set the IMSWITCH_REPO repository variable to openUC2/ImSwitch.
+      SUITE_REPO: ${{ vars.IMSWITCH_REPO || 'LeonardPertsch/ImSwitch' }}
+
     steps:
       - name: Checkout os-rpi
         uses: actions/checkout@v7
@@ -47,13 +60,10 @@ jobs:
       - name: Checkout ImSwitch
         uses: actions/checkout@v7
         with:
-          # IMPORTANT:
-          # This currently points to LeonardPertsch/ImSwitch because the HIL
-          # tooling under imswitch/imcontrol/_test/e2e/ci is not upstream yet.
-          # Before/after merging the HIL tooling into openUC2/ImSwitch, change
-          # this to:
-          #   repository: openUC2/ImSwitch
-          repository: LeonardPertsch/ImSwitch
+          repository: ${{ env.SUITE_REPO }}
+          # Empty takes that repository's default branch, and so does every PR
+          # run: inputs only exist for a manual run.
+          ref: ${{ inputs.suite_ref }}
           path: ImSwitch
 
       - name: Determine image and tests
@@ -98,10 +108,14 @@ jobs:
           NAME="${IMAGE%@*}"
           echo "report=hil-report-${NAME//[\/:]/-}" >> "$GITHUB_OUTPUT"
 
+          # The suite moves with its branch, so record the exact commit that ran.
+          SUITE="$SUITE_REPO@$(git -C ImSwitch rev-parse --short HEAD)"
+
           echo "Runner:        $(hostname)"
           echo "Image to test: $IMAGE"
+          echo "Suite:         $SUITE"
           echo "Tests:         ${TESTS:-all}"
-          echo "Testing \`$IMAGE\` on \`$(hostname)\`, tests: ${TESTS:-all}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Testing \`$IMAGE\` on \`$(hostname)\` with suite \`$SUITE\`, tests: ${TESTS:-all}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Run the e2e suite against the image under test
         working-directory: ImSwitch/imswitch/imcontrol/_test/e2e
