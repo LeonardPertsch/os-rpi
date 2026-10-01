@@ -47,6 +47,12 @@ jobs:
       - name: Checkout ImSwitch
         uses: actions/checkout@v7
         with:
+          # IMPORTANT:
+          # This currently points to LeonardPertsch/ImSwitch because the HIL
+          # tooling under imswitch/imcontrol/_test/e2e/ci is not upstream yet.
+          # Before/after merging the HIL tooling into openUC2/ImSwitch, change
+          # this to:
+          #   repository: openUC2/ImSwitch
           repository: LeonardPertsch/ImSwitch
           path: ImSwitch
 
