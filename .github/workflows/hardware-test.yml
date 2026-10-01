@@ -5,9 +5,11 @@ on:
     inputs:
       image:
         description: >
-          Image to test. Empty takes the newest master build of openUC2/ImSwitch
-          (the image behind the edge tag). A bare tag (e.g. sha-7d3adda) resolves
-          against ghcr.io/openuc2/imswitch; a full ref (repo/image:tag) is used as-is.
+          Only swap this ImSwitch image in, on whatever pallet the rig runs.
+          Empty (the default) tests the whole os-rpi pallet of the commit this
+          run is on instead: every Docker deployment, the firmware server
+          included. A bare tag (e.g. sha-7d3adda) resolves against
+          ghcr.io/openuc2/imswitch; a full ref (repo/image:tag) is used as-is.
         required: false
         default: ""
       tests:
@@ -52,11 +54,6 @@ jobs:
       SUITE_REPO: ${{ vars.IMSWITCH_REPO || 'LeonardPertsch/ImSwitch' }}
 
     steps:
-      - name: Checkout os-rpi
-        uses: actions/checkout@v7
-        with:
-          path: os-rpi
-
       - name: Checkout ImSwitch
         uses: actions/checkout@v7
         with:
@@ -66,65 +63,55 @@ jobs:
           ref: ${{ inputs.suite_ref }}
           path: ImSwitch
 
-      - name: Determine image and tests
+      - name: Determine what to test
         id: config
         env:
-          # Without it gh falls back to the account logged in on the Pi!
-          GH_TOKEN: ${{ github.token }}
           IMAGE_INPUT: ${{ inputs.image }}
           TESTS_INPUT: ${{ inputs.tests }}
+          # A PR's head commit, not the merge commit GitHub makes for it: only
+          # commits on a branch can be fetched by forklift.
+          PALLET_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
-          IMAGE="$IMAGE_INPUT"
           TESTS="$TESTS_INPUT"
 
-          # A PR tests the image it would deploy: the pin in its ImSwitch
-          # package, digest included, exactly as forklift runs it.
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            IMAGE="$(awk '$1 == "image:" && $2 ~ /^ghcr\.io\/openuc2\/imswitch[:@]/ { print $2; exit }' \
-              os-rpi/deployments/imswitch.pkg/deployment.compose.yml | tr -d "\"'")"
-            if [ -z "$IMAGE" ]; then
-              echo "::error::no ImSwitch image pinned in deployments/imswitch.pkg/deployment.compose.yml"
-              exit 1
-            fi
+          # Only a manual run with an image swaps just that image. Everything
+          # else tests the os-rpi pallet of this run's commit as a whole.
+          if [ -n "$IMAGE_INPUT" ]; then
+            MODE=image
+            TARGET="$IMAGE_INPUT"
+            # Artifact names must not contain / or :, a full ref has both. The
+            # digest adds nothing a reader needs there.
+            NAME="${TARGET%@*}"
+            REPORT="hil-report-${NAME//[\/:]/-}"
+          else
+            MODE=pallet
+            TARGET="github.com/$GITHUB_REPOSITORY@$PALLET_COMMIT"
+            REPORT="hil-report-pallet-${PALLET_COMMIT::7}"
           fi
 
-          # Every successful master push publishes sha-<commit> and moves edge.
-          # Pick the newest by date ourselves: the API has answered with an
-          # older run first before.
-          if [ -z "$IMAGE" ]; then
-            SHA="$(gh api "repos/openUC2/ImSwitch/actions/workflows/build-docker-server.yaml/runs?branch=master&event=push&status=success&per_page=20" \
-              --jq '.workflow_runs | max_by(.created_at) | .head_sha // empty')"
-            if [ -z "$SHA" ]; then
-              echo "::error::no successful master build of openUC2/ImSwitch found"
-              exit 1
-            fi
-            IMAGE="sha-${SHA::7}"
-          fi
-
-          echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+          echo "target=$TARGET" >> "$GITHUB_OUTPUT"
           echo "tests=$TESTS" >> "$GITHUB_OUTPUT"
-          # Artifact names must not contain / or :, a full ref has both. The
-          # digest adds nothing a reader needs there.
-          NAME="${IMAGE%@*}"
-          echo "report=hil-report-${NAME//[\/:]/-}" >> "$GITHUB_OUTPUT"
+          echo "report=$REPORT" >> "$GITHUB_OUTPUT"
 
           # The suite moves with its branch, so record the exact commit that ran.
           SUITE="$SUITE_REPO@$(git -C ImSwitch rev-parse --short HEAD)"
 
-          echo "Runner:        $(hostname)"
-          echo "Image to test: $IMAGE"
-          echo "Suite:         $SUITE"
-          echo "Tests:         ${TESTS:-all}"
-          echo "Testing \`$IMAGE\` on \`$(hostname)\` with suite \`$SUITE\`, tests: ${TESTS:-all}" >> "$GITHUB_STEP_SUMMARY"
+          echo "Runner:  $(hostname)"
+          echo "Testing: $MODE $TARGET"
+          echo "Suite:   $SUITE"
+          echo "Tests:   ${TESTS:-all}"
+          echo "Testing $MODE \`$TARGET\` on \`$(hostname)\` with suite \`$SUITE\`, tests: ${TESTS:-all}" >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Run the e2e suite against the image under test
+      - name: Run the e2e suite on the rig
         working-directory: ImSwitch/imswitch/imcontrol/_test/e2e
         env:
-          IMAGE: ${{ steps.config.outputs.image }}
+          MODE: ${{ steps.config.outputs.mode }}
+          TARGET: ${{ steps.config.outputs.target }}
           TESTS: ${{ steps.config.outputs.tests }}
         run: |
           ci/hil-run.sh \
-            --image "$IMAGE" \
+            "--$MODE" "$TARGET" \
             --yes \
             --out ci/reports \
             --tests "$TESTS"
