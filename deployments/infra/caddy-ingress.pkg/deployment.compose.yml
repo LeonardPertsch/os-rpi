@@ -26,7 +26,7 @@ services:
       caddy.auto_https: disable_redirects
 
   external:
-    image: docker.io/library/caddy:2.11.8@sha256:f04f1e8d78da0c65ec6f81b4ea8d216849775f3bc3c87790d95fcb2ec3722f12
+    image: docker.io/library/caddy:2.11.9@sha256:13d490f64f99ee3e3dcd828add6d3b822a916cdb3490d9d272a8d761678da624
     network_mode: host
     volumes:
       - type: bind
